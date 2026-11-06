@@ -13,3 +13,7 @@ Para publicar: Render, Railway ou Fly.io (defina as mesmas variáveis de ambient
 - Admin: vê os registros de todos (filtro por técnico e dia), cria/desativa técnicos, troca senhas.
 - Técnico: registra atividades e vê só os próprios registros.
 - A comprovação é um link opcional (Drive, OneDrive, etc.). O sistema não guarda imagens.
+
+## Vercel
+Variáveis necessárias: DATABASE_URL, JWT_SECRET, ADMIN_EMAIL, ADMIN_SENHA (marque para Production e faça novo deploy depois de criar/alterar).
+Se o login falhar com erro de banco, use a connection string "Pooled" do Neon.

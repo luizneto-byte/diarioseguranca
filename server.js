@@ -7,7 +7,10 @@ const SEGREDO = process.env.JWT_SECRET;
 const app = express();
 app.use(express.json());
 app.use(cookieParser());
-app.use(express.static('public'));
+const path = require('path'), fs = require('fs');
+let PAGINA = '<h1>index.html não encontrado</h1>';
+try { PAGINA = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8'); } catch (e) { console.error(e.message); }
+app.get('/', (req, res) => res.type('html').send(PAGINA));
 
 const wrap = f => (q, s, n) => f(q, s, n).catch(e => { console.error(e); s.status(500).json({ erro: 'Erro interno' }); });
 const auth = (req, res, next) => {
@@ -15,6 +18,10 @@ const auth = (req, res, next) => {
   catch { res.status(401).json({ erro: 'Faça login' }); }
 };
 const soAdmin = (req, res, next) => req.u.role === 'admin' ? next() : res.status(403).json({ erro: 'Apenas administrador' });
+
+app.use('/api', (req, res, next) => preparar().then(() => next()).catch(e => {
+  console.error(e); res.status(500).json({ erro: 'Falha ao conectar no banco: ' + e.message });
+}));
 
 // ---------- Login ----------
 app.post('/api/login', wrap(async (req, res) => {
@@ -80,8 +87,9 @@ app.patch('/api/usuarios/:id', auth, soAdmin, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// ---------- Inicialização ----------
-(async () => {
+// ---------- Inicialização (preguiçosa: roda na primeira chamada à API) ----------
+let pronto = null;
+const preparar = () => pronto ||= (async () => {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS usuarios(
       id SERIAL PRIMARY KEY, nome TEXT NOT NULL, email TEXT UNIQUE NOT NULL, senha_hash TEXT NOT NULL,
@@ -97,5 +105,7 @@ app.patch('/api/usuarios/:id', auth, soAdmin, wrap(async (req, res) => {
       [process.env.ADMIN_EMAIL.toLowerCase(), await bcrypt.hash(process.env.ADMIN_SENHA, 10)]);
     console.log('Conta admin criada:', process.env.ADMIN_EMAIL);
   }
-  app.listen(process.env.PORT || 3000, () => console.log('Rodando na porta', process.env.PORT || 3000));
-})().catch(e => { console.error('Falha ao iniciar:', e.message); process.exit(1); });
+})().catch(e => { pronto = null; throw e; });
+
+module.exports = app;
+if (require.main === module) app.listen(process.env.PORT || 3000, () => console.log('Rodando em http://localhost:' + (process.env.PORT || 3000)));
