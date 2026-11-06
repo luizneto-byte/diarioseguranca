@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diário de Segurança</title>
+<style>
+:root{--bg:#f3f4f1;--card:#fff;--tx:#1c2321;--mut:#667068;--bd:#d9ddd6;--pri:#0f5c4d;--pri2:#0b4438;--err:#b3261e}
+@media (prefers-color-scheme:dark){:root{--bg:#141815;--card:#1d231f;--tx:#e8ece8;--mut:#98a39b;--bd:#2f3832;--pri:#3fb59b;--pri2:#5fcdb4;--err:#ff8a80}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--tx)}
+header{display:flex;justify-content:space-between;align-items:center;padding:12px 20px;background:var(--pri);color:#fff}
+header b{font-size:18px}
+main{max-width:860px;margin:0 auto;padding:20px}
+.box{background:var(--card);border:1px solid var(--bd);border-radius:8px;padding:18px;margin-bottom:18px}
+h2{margin:0 0 12px;font-size:18px}
+label{display:block;font-size:14px;color:var(--mut);margin:10px 0 4px}
+input,textarea,select{width:100%;padding:10px;font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:6px}
+input:focus,textarea:focus,select:focus,button:focus-visible{outline:2px solid var(--pri);outline-offset:1px}
+button{font:inherit;cursor:pointer;border:0;border-radius:6px;padding:10px 16px;background:var(--pri);color:#fff}
+button:hover{background:var(--pri2)}
+button.sec{background:transparent;color:inherit;border:1px solid var(--bd)}
+header button.sec{color:#fff;border-color:#ffffff88}
+.row{display:flex;gap:12px;flex-wrap:wrap}.row>*{flex:1;min-width:150px}
+.tabs{display:flex;gap:8px;margin-bottom:16px}.tabs button{background:var(--card);color:var(--tx);border:1px solid var(--bd)}
+.tabs button.on{background:var(--pri);color:#fff;border-color:var(--pri)}
+.reg{border-top:1px solid var(--bd);padding:14px 0}.reg:first-child{border-top:0}
+.reg .meta{color:var(--mut);font-size:14px}
+.reg .quem{font-weight:600}
+a{color:var(--pri)}
+.err{color:var(--err);min-height:1.4em;margin-top:8px}
+.vazio{color:var(--mut);padding:12px 0}
+#login{max-width:380px;margin:12vh auto}
+.hide{display:none}
+</style>
+</head>
+<body>
+<header><b>Diário de Segurança</b><span id="quem" class="hide"><span id="nome"></span> <button class="sec" onclick="sair()">Sair</button></span></header>
+<main>
+  <section id="login" class="box">
+    <h2>Entrar</h2>
+    <label for="email">E-mail</label><input id="email" type="email" autocomplete="username">
+    <label for="senha">Senha</label><input id="senha" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')entrar()">
+    <div class="err" id="errLogin"></div>
+    <button onclick="entrar()">Entrar</button>
+  </section>
+
+  <section id="app" class="hide">
+    <div id="tabs" class="tabs hide">
+      <button id="tReg" class="on" onclick="aba('reg')">Registros</button>
+      <button id="tNovo" onclick="aba('novo')">Novo registro</button>
+      <button id="tUsr" onclick="aba('usr')">Técnicos</button>
+    </div>
+
+    <div id="vNovo" class="box">
+      <h2>Registrar atividade</h2>
+      <label for="atividade">O que foi feito</label><textarea id="atividade" rows="3"></textarea>
+      <div class="row">
+        <div><label for="local">Local</label><input id="local"></div>
+        <div><label for="dh">Data e hora</label><input id="dh" type="datetime-local"></div>
+      </div>
+      <label for="link">Link da comprovação (opcional)</label><input id="link" type="url" placeholder="https://...">
+      <div class="err" id="errNovo"></div>
+      <button onclick="salvar()">Salvar registro</button>
+    </div>
+
+    <div id="vReg">
+      <div id="filtros" class="box hide">
+        <div class="row">
+          <div><label for="fTec">Técnico</label><select id="fTec" onchange="carregar()"><option value="">Todos</option></select></div>
+          <div><label for="fDia">Dia</label><input id="fDia" type="date" onchange="carregar()"></div>
+          <div style="flex:0"><label>&nbsp;</label><button class="sec" onclick="fDia.value='';fTec.value='';carregar()">Limpar</button></div>
+        </div>
+      </div>
+      <div class="box"><h2 id="tituloLista">Meus registros</h2><div id="lista"></div></div>
+    </div>
+
+    <div id="vUsr" class="hide">
+      <div class="box">
+        <h2>Novo técnico</h2>
+        <div class="row">
+          <div><label for="uNome">Nome</label><input id="uNome"></div>
+          <div><label for="uEmail">E-mail</label><input id="uEmail" type="email"></div>
+          <div><label for="uSenha">Senha inicial</label><input id="uSenha" type="text"></div>
+        </div>
+        <div class="err" id="errUsr"></div>
+        <button onclick="criarUsuario()">Criar conta</button>
+      </div>
+      <div class="box"><h2>Contas</h2><div id="listaUsr"></div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let eu = null;
+
+async function api(url, opt = {}) {
+  const r = await fetch(url, opt);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.erro || 'Erro');
+  return d;
+}
+const json = (m, b) => ({ method: m, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
+const agoraLocal = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+
+async function entrar() {
+  $('errLogin').textContent = '';
+  try { eu = await api('/api/login', json('POST', { email: $('email').value, senha: $('senha').value })); iniciar(); }
+  catch (e) { $('errLogin').textContent = e.message; }
+}
+async function sair() { await api('/api/logout', { method: 'POST' }); location.reload(); }
+
+async function iniciar() {
+  $('login').classList.add('hide'); $('app').classList.remove('hide');
+  $('quem').classList.remove('hide'); $('nome').textContent = eu.nome + (eu.role === 'admin' ? ' (admin)' : '');
+  $('dh').value = agoraLocal();
+  const adm = eu.role === 'admin';
+  $('tabs').classList.remove('hide');
+  $('tUsr').classList.toggle('hide', !adm);
+  $('filtros').classList.toggle('hide', !adm);
+  $('tituloLista').textContent = adm ? 'Registros da equipe' : 'Meus registros';
+  if (adm) { const us = await api('/api/usuarios'); $('fTec').innerHTML = '<option value="">Todos</option>' + us.filter(u => u.role === 'tecnico').map(u => `<option value="${u.id}">${esc(u.nome)}</option>`).join(''); }
+  aba('reg');
+}
+
+function aba(a) {
+  ['reg', 'novo', 'usr'].forEach(x => { $('v' + x[0].toUpperCase() + x.slice(1)).classList.toggle('hide', x !== a); $('t' + x[0].toUpperCase() + x.slice(1)).classList.toggle('on', x === a); });
+  if (a === 'reg') carregar();
+  if (a === 'usr') carregarUsuarios();
+}
+
+async function salvar() {
+  $('errNovo').textContent = '';
+  try {
+    await api('/api/registros', json('POST', {
+      atividade: $('atividade').value, local: $('local').value, link: $('link').value,
+      data_hora: $('dh').value ? new Date($('dh').value).toISOString() : null }));
+    ['atividade', 'local', 'link'].forEach(i => $(i).value = ''); $('dh').value = agoraLocal();
+    aba('reg');
+  } catch (e) { $('errNovo').textContent = e.message; }
+}
+
+async function carregar() {
+  const q = new URLSearchParams();
+  if (eu.role === 'admin') { if ($('fTec').value) q.set('tecnico', $('fTec').value); }
+  if ($('fDia').value) q.set('dia', $('fDia').value);
+  const rs = await api('/api/registros?' + q);
+  $('lista').innerHTML = rs.length ? rs.map(r => `
+    <div class="reg">
+      ${eu.role === 'admin' ? `<div class="quem">${esc(r.tecnico)}</div>` : ''}
+      <div>${esc(r.atividade)}</div>
+      <div class="meta">${new Date(r.data_hora).toLocaleString('pt-BR')} — ${esc(r.local)}</div>
+      ${r.link ? `<div><a href="${esc(r.link)}" target="_blank" rel="noopener noreferrer">Abrir comprovação</a></div>` : ''}
+    </div>`).join('') : '<div class="vazio">Nenhum registro encontrado.</div>';
+}
+
+async function carregarUsuarios() {
+  const us = await api('/api/usuarios');
+  $('listaUsr').innerHTML = us.map(u => `
+    <div class="reg row" style="align-items:center">
+      <div><div class="quem">${esc(u.nome)}${u.role === 'admin' ? ' (admin)' : ''}</div><div class="meta">${esc(u.email)}${u.ativo ? '' : ' — desativado'}</div></div>
+      <div style="flex:0;white-space:nowrap">
+        <button class="sec" onclick="novaSenha(${u.id})">Nova senha</button>
+        ${u.id !== eu.id ? `<button class="sec" onclick="alternar(${u.id},${!u.ativo})">${u.ativo ? 'Desativar' : 'Reativar'}</button>` : ''}
+      </div>
+    </div>`).join('');
+}
+async function criarUsuario() {
+  $('errUsr').textContent = '';
+  try { await api('/api/usuarios', json('POST', { nome: $('uNome').value, email: $('uEmail').value, senha: $('uSenha').value })); ['uNome', 'uEmail', 'uSenha'].forEach(i => $(i).value = ''); carregarUsuarios(); iniciarFiltro(); }
+  catch (e) { $('errUsr').textContent = e.message; }
+}
+async function iniciarFiltro() { const us = await api('/api/usuarios'); $('fTec').innerHTML = '<option value="">Todos</option>' + us.filter(u => u.role === 'tecnico').map(u => `<option value="${u.id}">${esc(u.nome)}</option>`).join(''); }
+async function alternar(id, ativo) { await api('/api/usuarios/' + id, json('PATCH', { ativo })); carregarUsuarios(); }
+async function novaSenha(id) { const s = prompt('Nova senha (mín. 6 caracteres):'); if (s) try { await api('/api/usuarios/' + id, json('PATCH', { senha: s })); alert('Senha alterada.'); } catch (e) { alert(e.message); } }
+
+api('/api/me').then(u => { eu = u; iniciar(); }).catch(() => {});
+</script>
+</body>
+</html>
