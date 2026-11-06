@@ -49,17 +49,57 @@ app.post('/api/registros', auth, wrap(async (req, res) => {
   res.json({ id: r.rows[0].id });
 }));
 
-// Admin vê todos (com filtros); técnico vê só os próprios
+// Privacidade: administradores veem toda a equipe; técnicos só acessam os próprios registros.
 app.get('/api/registros', auth, wrap(async (req, res) => {
   const tecnico = req.u.role === 'admin' ? (req.query.tecnico || null) : req.u.id;
   const dia = req.query.dia || null;
   const { rows } = await pool.query(`
-    SELECT r.id, r.atividade, r.local, r.data_hora, r.link, u.nome AS tecnico
+    SELECT r.id, r.user_id, r.atividade, r.local, r.data_hora, r.link, u.nome AS tecnico,
+      (SELECT COUNT(*)::int FROM curtidas c WHERE c.registro_id=r.id) AS curtidas,
+      (SELECT COUNT(*)::int FROM comentarios co WHERE co.registro_id=r.id) AS comentarios,
+      EXISTS(SELECT 1 FROM curtidas c WHERE c.registro_id=r.id AND c.user_id=$3) AS curtido
     FROM registros r JOIN usuarios u ON u.id=r.user_id
     WHERE ($1::int IS NULL OR r.user_id=$1)
       AND ($2::date IS NULL OR (r.data_hora AT TIME ZONE 'America/Sao_Paulo')::date=$2::date)
-    ORDER BY r.data_hora DESC LIMIT 500`, [tecnico, dia]);
+    ORDER BY r.data_hora DESC LIMIT 500`, [tecnico, dia, req.u.id]);
   res.json(rows);
+}));
+
+// ---------- Interações do feed ----------
+app.post('/api/registros/:id/curtir', auth, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ erro: 'Registro inválido' });
+  const registro = await pool.query('SELECT user_id FROM registros WHERE id=$1 AND ($2::boolean OR user_id=$3)', [id, req.u.role === 'admin', req.u.id]);
+  if (!registro.rows.length)
+    return res.status(404).json({ erro: 'Registro não encontrado' });
+  const curtiu = await pool.query('DELETE FROM curtidas WHERE registro_id=$1 AND user_id=$2 RETURNING registro_id', [id, req.u.id]);
+  let curtido = false;
+  if (!curtiu.rowCount) {
+    await pool.query('INSERT INTO curtidas(registro_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [id, req.u.id]);
+    curtido = true;
+  }
+  const { rows } = await pool.query('SELECT COUNT(*)::int AS total FROM curtidas WHERE registro_id=$1', [id]);
+  res.json({ curtido, curtidas: rows[0].total });
+}));
+app.get('/api/registros/:id/comentarios', auth, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ erro: 'Registro inválido' });
+  const registro = await pool.query('SELECT user_id FROM registros WHERE id=$1 AND ($2::boolean OR user_id=$3)', [id, req.u.role === 'admin', req.u.id]);
+  if (!registro.rows.length)
+    return res.status(404).json({ erro: 'Registro não encontrado' });
+  const { rows } = await pool.query('SELECT c.id,c.texto,c.criado_em,u.nome FROM comentarios c JOIN usuarios u ON u.id=c.user_id WHERE c.registro_id=$1 ORDER BY c.criado_em ASC LIMIT 200', [id]);
+  res.json(rows);
+}));
+app.post('/api/registros/:id/comentarios', auth, wrap(async (req, res) => {
+  const id = Number(req.params.id);
+  const texto = String(req.body?.texto || '').trim();
+  if (!Number.isSafeInteger(id) || id < 1) return res.status(400).json({ erro: 'Registro inválido' });
+  if (!texto || texto.length > 2000) return res.status(400).json({ erro: 'Comentário deve conter de 1 a 2000 caracteres' });
+  const registro = await pool.query('SELECT user_id FROM registros WHERE id=$1 AND ($2::boolean OR user_id=$3)', [id, req.u.role === 'admin', req.u.id]);
+  if (!registro.rows.length)
+    return res.status(404).json({ erro: 'Registro não encontrado' });
+  const { rows } = await pool.query('INSERT INTO comentarios(registro_id,user_id,texto) VALUES($1,$2,$3) RETURNING id', [id, req.u.id, texto]);
+  res.json({ id: rows[0].id });
 }));
 
 // ---------- Usuários (admin) ----------
@@ -98,7 +138,21 @@ const preparar = () => pronto ||= (async () => {
       id SERIAL PRIMARY KEY, user_id INT NOT NULL REFERENCES usuarios(id),
       atividade TEXT NOT NULL, local TEXT NOT NULL, data_hora TIMESTAMPTZ NOT NULL DEFAULT now(), link TEXT,
       criado_em TIMESTAMPTZ NOT NULL DEFAULT now());
-    CREATE INDEX IF NOT EXISTS idx_reg_user_data ON registros(user_id, data_hora DESC);`);
+    CREATE INDEX IF NOT EXISTS idx_reg_user_data ON registros(user_id, data_hora DESC);
+    CREATE TABLE IF NOT EXISTS curtidas (
+      registro_id INT NOT NULL REFERENCES registros(id) ON DELETE CASCADE,
+      user_id INT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(registro_id,user_id)
+    );
+    CREATE TABLE IF NOT EXISTS comentarios (
+      id SERIAL PRIMARY KEY,
+      registro_id INT NOT NULL REFERENCES registros(id) ON DELETE CASCADE,
+      user_id INT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+      texto TEXT NOT NULL,
+      criado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS idx_comentarios_registro ON comentarios(registro_id,criado_em);`);
   const { rows } = await pool.query("SELECT 1 FROM usuarios WHERE role='admin' LIMIT 1");
   if (!rows.length) {
     await pool.query("INSERT INTO usuarios(nome,email,senha_hash,role) VALUES('Administrador',$1,$2,'admin')",
